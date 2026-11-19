@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IVO Mirror</string>
+    <string name="tagline">Receba a tela do iPhone no IVO LIVE</string>
+    <string name="stop">Parar</string>
+    <string name="start">Ligar</string>
+    <string name="notif_waiting">Esperando o iPhone…</string>
+    <string name="status_ready">Pronto. No iPhone: Central de Controle › Espelhar Tela › %1$s</string>
+    <string name="status_failed">Não deu para ligar o receptor (erro %1$d).</string>
+    <string name="status_iphone">Recebendo a tela de %1$s</string>
+    <string name="status_off">Desligado.</string>
+    <string name="phase_off">Desligado</string>
+    <string name="phase_ready">Esperando o iPhone</string>
+    <string name="phase_receiving">Recebendo o iPhone</string>
+    <string name="phase_failed">Não ligou</string>
+    <string name="off_hint">Toque em Ligar para este celular aparecer no Espelhar Tela do iPhone.</string>
+    <string name="ready_hint">No iPhone: Central de Controle › Espelhar Tela › %1$s</string>
+    <string name="ivo_watching">Mandando para o IVO LIVE: %1$d</string>
+    <string name="chip_ivo_none">IVO LIVE: nenhum</string>
+    <string name="chip_ivo">IVO LIVE: %1$d</string>
+    <string name="send_log">Enviar relatório</string>
+    <string name="picture_line">Imagem %1$d×%2$d · do iPhone %3$d fps · para o IVO LIVE %4$d fps</string>
+    <string name="quality_title">QUALIDADE DA IMAGEM</string>
+    <string name="quality_normal">Normal</string>
+    <string name="quality_high">Alta</string>
+    <string name="quality_normal_hint">1080p. Leve: serve para qualquer celular. Com o iPhone em pé a imagem fica estreita (cerca de 500×1080).</string>
+    <string name="quality_high_hint">1440p. Com o iPhone em pé a imagem fica com cerca do dobro da nitidez. Pesa mais neste celular: se o relatório disser \"decodificador atrasado\", volte para Normal.</string>
+    <string name="quality_next_time">Vale quando ligar de novo (toque em Parar e depois em Ligar).</string>
+    <string name="how_title">COMO USAR</string>
+    <string name="how_1">Os dois aparelhos no mesmo Wi-Fi.</string>
+    <string name="how_2">Toque em Ligar.</string>
+    <string name="how_3">No iPhone, abra a Central de Controle, toque em Espelhar Tela e escolha este celular.</string>
+    <string name="how_4">No IVO LIVE (neste ou em outro celular): + Fonte › Outro celular › \"iPhone · …\".</string>
+    <string name="limits">O iPhone espelha a cerca de 30 quadros por segundo; é o limite da Apple.</string>
+    <string name="about">Código aberto (GPL-3.0) · versão %1$s · toque para ver as licenças</string>
+    <string name="licenses_title">Licenças</string>
+    <string name="licenses_body">IVO Mirror é código aberto sob a GPL-3.0 (texto completo no código-fonte).\n\nUsa:\n• UxPlay e playfair — GPL-3.0\n• libplist — LGPL-2.1\n• OpenSSL — Apache-2.0\n• Material Icons (Google) — Apache-2.0\n• Barlow Semi Condensed — SIL Open Font License\n\niPhone, iOS e AirPlay são marcas da Apple Inc. Este app não é da Apple nem tem ligação com ela.</string>
+    <string name="ok">OK</string>
+</resources>

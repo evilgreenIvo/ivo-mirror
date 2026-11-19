@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- IVO Mirror: a phone on IVO LIVE's dark disc, its picture going out as green waves. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#0B0F0C" android:pathData="M54,4a50,50 0,1 1,0 100a50,50 0,1 1,0 -100z" />
+    <!-- phone -->
+    <path android:strokeColor="#E6F2EA" android:strokeWidth="5" android:fillColor="#00000000"
+        android:pathData="M34,28h18a6,6 0,0 1,6 6v40a6,6 0,0 1,-6 6h-18a6,6 0,0 1,-6 -6v-40a6,6 0,0 1,6 -6z" />
+    <path android:fillColor="#00E27A" android:pathData="M37,38h12v28h-12z" />
+    <!-- waves -->
+    <path android:strokeColor="#00E27A" android:strokeWidth="6" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M68,42a16,16 0,0 1,0 24" />
+    <path android:strokeColor="#00E27A" android:strokeWidth="6" android:strokeLineCap="round" android:strokeAlpha="0.55" android:fillColor="#00000000"
+        android:pathData="M78,34a28,28 0,0 1,0 40" />
+</vector>
