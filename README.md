@@ -1,6 +1,6 @@
 # IVO Mirror
 
-Receba a tela do iPhone num celular Android e use como fonte no **[IVO LIVE](https://github.com/evilgreenIvo/ivo-live)**.
+Receba a tela do iPhone num celular Android e use como fonte no **[IVO LIVE](https://evilgreenivo.github.io/ivo-live/)**, o estúdio de live e gravação grátis para Android.
 
 No iPhone você usa o **Espelhar Tela** de sempre (Central de Controle). O IVO Mirror recebe a imagem e o som e manda para o IVO LIVE, no mesmo celular ou em outro da mesma Wi-Fi, como a fonte **Outro celular**.
 
