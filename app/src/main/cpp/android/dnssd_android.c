@@ -78,7 +78,7 @@ int dnssd_register_raop(dnssd_t *dnssd_public, unsigned short port) {
     txt_add(t, n, "md", RAOP_MD);
     txt_add(t, n, "rhd", RAOP_RHD);
     txt_add(t, n, "pw", "false");
-    txt_add(t, n, "sf", RAOP_SF);
+    txt_add(t, n, "sf", dnssd_public->pin_pw == 1 ? "0x8c" : RAOP_SF);
     txt_add(t, n, "sr", RAOP_SR);
     txt_add(t, n, "ss", RAOP_SS);
     txt_add(t, n, "sv", RAOP_SV);
@@ -111,7 +111,8 @@ int dnssd_register_airplay(dnssd_t *dnssd_public, unsigned short port) {
     txt_add(t, n, "deviceid", device_id);
     txt_add(t, n, "features", features);
     txt_add(t, n, "pw", "false");
-    txt_add(t, n, "flags", "0x4");
+    /* 0x8 = PIN required (the iPhone shows the code entry). */
+    txt_add(t, n, "flags", dnssd_public->pin_pw == 1 ? "0x8c" : "0x4");
     txt_add(t, n, "model", GLOBAL_MODEL);
     txt_add(t, n, "pk", dnssd_public->pk ? dnssd_public->pk : "");
     txt_add(t, n, "pi", AIRPLAY_PI);

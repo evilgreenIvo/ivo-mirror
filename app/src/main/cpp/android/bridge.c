@@ -26,7 +26,7 @@
 
 static JavaVM *vm;
 static jclass native_class;
-static jmethodID m_announce, m_video, m_audio, m_audio_format, m_size, m_client, m_connections, m_log;
+static jmethodID m_announce, m_video, m_audio, m_audio_format, m_size, m_client, m_connections, m_log, m_pin;
 static pthread_key_t detach_key;
 
 static raop_t *raop;
@@ -72,6 +72,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *jvm, void *reserved) {
     m_client = (*env)->GetStaticMethodID(env, c, "client", "(Ljava/lang/String;Ljava/lang/String;)V");
     m_connections = (*env)->GetStaticMethodID(env, c, "connections", "(I)V");
     m_log = (*env)->GetStaticMethodID(env, c, "log", "(ILjava/lang/String;)V");
+    m_pin = (*env)->GetStaticMethodID(env, c, "pin", "(Ljava/lang/String;)V");
     if (!m_announce || !m_video || !m_audio || !m_audio_format || !m_size || !m_client || !m_connections || !m_log) return JNI_ERR;
     pthread_key_create(&detach_key, detach_thread);
     return JNI_VERSION_1_6;
@@ -200,8 +201,45 @@ static void report_client_request(void *cls, char *deviceid, char *model, char *
     (*env)->DeleteLocalRef(env, m);
 }
 
-static bool check_register(void *cls, const char *pk) { (void) cls; (void) pk; return true; }
-static void register_client(void *cls, const char *id, const char *pk, const char *name) { (void) cls; (void) id; (void) pk; (void) name; }
+/* --- PIN: iPhones that typed the code once are kept in a file (their public key), like UxPlay --- */
+
+static int use_pin;
+static char clients_file[512];
+
+static bool check_register(void *cls, const char *pk) {
+    (void) cls;
+    if (!use_pin) return true;
+    if (!pk) return false;
+    FILE *f = fopen(clients_file, "r");
+    if (!f) return false;
+    char line[512];
+    bool found = false;
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (!strcmp(line, pk)) { found = true; break; }
+    }
+    fclose(f);
+    return found;
+}
+
+static void register_client(void *cls, const char *id, const char *pk, const char *name) {
+    (void) cls; (void) id; (void) name;
+    if (!use_pin || !pk || check_register(NULL, pk)) return;
+    FILE *f = fopen(clients_file, "a");
+    if (!f) return;
+    fprintf(f, "%s\n", pk);
+    fclose(f);
+}
+
+static void display_pin(void *cls, char *pin) {
+    (void) cls;
+    JNIEnv *env = env_now();
+    if (!env || !m_pin) return;
+    jstring p = jstr(env, pin);
+    (*env)->CallStaticVoidMethod(env, native_class, m_pin, p);
+    clear_exception(env);
+    (*env)->DeleteLocalRef(env, p);
+}
 static void audio_flush(void *cls) { (void) cls; }
 static void video_flush(void *cls) { (void) cls; }
 static void video_pause(void *cls) { (void) cls; }
@@ -221,7 +259,7 @@ static int parse_mac(const char *mac, char out[6]) {
 
 JNIEXPORT jint JNICALL
 Java_com_evilgreen_airplay_Native_start(JNIEnv *env, jclass cls, jstring jname, jstring jmac, jstring jkeyfile,
-                                        jint width, jint height, jint fps) {
+                                        jint width, jint height, jint fps, jint pin) {
     (void) cls;
     pthread_mutex_lock(&lock);
     if (raop) { pthread_mutex_unlock(&lock); return -10; }
@@ -236,7 +274,12 @@ Java_com_evilgreen_airplay_Native_start(JNIEnv *env, jclass cls, jstring jname, 
     if (parse_mac(mac, hw)) { result = -1; goto done; }
 
     int error = 0;
-    dnssd = dnssd_init(name, (int) strlen(name), hw, 6, 0, &error);
+    /* PIN (0 = off): the iPhone asks for this fixed 4-digit code the first time. */
+    use_pin = pin > 0;
+    snprintf(clients_file, sizeof(clients_file), "%s", keyfile);
+    char *slash = strrchr(clients_file, '/');
+    if (slash) snprintf(slash + 1, sizeof(clients_file) - (size_t) (slash + 1 - clients_file), "airplay-clients.txt");
+    dnssd = dnssd_init(name, (int) strlen(name), hw, 6, use_pin ? 1 : 0, &error);
     if (!dnssd) { result = -2; goto done; }
     /* Like UxPlay's defaults: no HLS video, no H.265, the newer pairing (not legacy). */
     dnssd_set_airplay_features(dnssd, 0, 0);
@@ -264,6 +307,7 @@ Java_com_evilgreen_airplay_Native_start(JNIEnv *env, jclass cls, jstring jname, 
     cbs.register_client = register_client;
     cbs.check_register = check_register;
     cbs.video_set_codec_and_size = video_set_codec_and_size;
+    cbs.display_pin = display_pin;
 
     raop = raop_init(&cbs);
     if (!raop) { result = -3; goto done; }
@@ -273,6 +317,8 @@ Java_com_evilgreen_airplay_Native_start(JNIEnv *env, jclass cls, jstring jname, 
     if (width > 0) raop_set_plist(raop, "width", width);
     if (height > 0) raop_set_plist(raop, "height", height);
     if (fps > 0) { raop_set_plist(raop, "refreshRate", fps); raop_set_plist(raop, "maxFPS", fps); }
+    /* Above 9999 means "this fixed code" to UxPlay (else a new random one each time). */
+    if (use_pin) raop_set_plist(raop, "pin", 10000 + (pin % 10000));
 
     unsigned short tcp[2] = {0, 0};
     unsigned short udp[3] = {0, 0, 0};

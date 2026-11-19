@@ -14,6 +14,8 @@ object Native {
         fun client(name: String, model: String)
         fun connections(count: Int)
         fun log(level: Int, msg: String)
+        /** The iPhone asks for the PIN: the code to type. */
+        fun pin(code: String)
     }
 
     @Volatile var listener: Listener? = null
@@ -21,7 +23,8 @@ object Native {
     init { System.loadLibrary("ivoairplay") }
 
     /** Starts announcing and serving; returns the port, or a negative error. */
-    @JvmStatic external fun start(name: String, mac: String, keyFile: String, width: Int, height: Int, fps: Int): Int
+    /** [pin] = the fixed 4-digit code the iPhone must type the first time, or 0 for none. */
+    @JvmStatic external fun start(name: String, mac: String, keyFile: String, width: Int, height: Int, fps: Int, pin: Int): Int
     @JvmStatic external fun stop()
 
     @JvmStatic fun announce(type: String, name: String, port: Int, txt: ByteArray?) { listener?.announce(type, name, port, txt) }
@@ -32,4 +35,5 @@ object Native {
     @JvmStatic fun client(name: String, model: String) { listener?.client(name, model) }
     @JvmStatic fun connections(count: Int) { listener?.connections(count) }
     @JvmStatic fun log(level: Int, msg: String) { listener?.log(level, msg) }
+    @JvmStatic fun pin(code: String) { listener?.pin(code) }
 }

@@ -82,16 +82,11 @@ class ReceiverService : Service(), Native.Listener {
         @Volatile var phase = Phase.OFF
             private set
         var onChange: (() -> Unit)? = null
+        /** The quick settings tile, while it's on screen. */
+        var onTile: (() -> Unit)? = null
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, ReceiverService::class.java))
-        }
-
-        /** Qualidade Alta: the iPhone is told about a 2560x1440 screen (standing up: about twice as sharp). */
-        fun highQuality(context: Context) = context.getSharedPreferences("mirror", Context.MODE_PRIVATE).getBoolean("high", false)
-
-        fun setHighQuality(context: Context, on: Boolean) {
-            context.getSharedPreferences("mirror", Context.MODE_PRIVATE).edit().putBoolean("high", on).apply()
         }
 
         fun stop(context: Context) {
@@ -112,6 +107,10 @@ class ReceiverService : Service(), Native.Listener {
     /** The iPhone's own setup (SPS + PPS): a new one restarts the transcoder. */
     private var iphoneConfig: ByteArray? = null
     @Volatile private var transcoder: Transcoder? = null
+    /** Fixed 16:9 frame for this session (see [Settings.fixedFrame]), and at 2560x1440 with Qualidade Alta. */
+    private var fixedFrame = true
+    private var highFrame = false
+
     /** The iPhone's last SPS and PPS, to remake the transcoder at a safe size if the first one gives nothing. */
     private var lastSps: ByteArray? = null
     private var lastPps: ByteArray? = null
@@ -162,18 +161,30 @@ class ReceiverService : Service(), Native.Listener {
         airplayName = "IVO Mirror (${deviceName()})"
         val key = File(filesDir, "airplay-key.pem").absolutePath
         // The "screen" the iPhone is told about: it fits its picture inside (never bigger than its own screen).
-        val high = highQuality(this)
+        val settings = Settings(this)
+        val high = settings.high
+        fixedFrame = settings.fixedFrame
+        highFrame = high
         val (w, h) = if (high) 2560 to 1440 else 1920 to 1080
-        val port = Native.start(airplayName, macAddress(), key, w, h, 60)
-        LogBook.add("Servidor AirPlay: porta $port · nome \"$airplayName\" · qualidade ${if (high) "Alta" else "Normal"} (${w}x$h)")
+        val pin = if (settings.pinOn) settings.pinCode else 0
+        val port = Native.start(airplayName, macAddress(), key, w, h, 60, pin)
+        LogBook.add("Servidor AirPlay: porta $port · nome \"$airplayName\" · qualidade ${if (high) "Alta" else "Normal"} (${w}x$h)" +
+            " · moldura ${if (fixedFrame) "16:9 fixa" else "do tamanho do iPhone"} · PIN ${if (pin > 0) "ligado" else "desligado"}")
         if (port > 0) say(getString(R.string.status_ready, airplayName), Phase.READY)
         else say(getString(R.string.status_failed, port), Phase.FAILED)
         return START_NOT_STICKY
     }
 
+    /** The tile shows on/off right away (asked even when the panel is closed). */
+    private fun tileRefresh() {
+        onTile?.invoke()
+        try { android.service.quicksettings.TileService.requestListeningState(this, android.content.ComponentName(this, MirrorTile::class.java)) } catch (_: Exception) {}
+    }
+
     override fun onDestroy() {
         running = false
         phase = Phase.OFF
+        tileRefresh()
         Native.listener = null
         try { Native.stop() } catch (_: Throwable) {}
         announced.values.forEach { l -> try { nsd?.unregisterService(l) } catch (_: Exception) {} }
@@ -213,6 +224,7 @@ class ReceiverService : Service(), Native.Listener {
         phase = now
         main.post {
             onChange?.invoke()
+            tileRefresh()
             if (running) getSystemService(NotificationManager::class.java).notify(NOTIF, notification(text))
         }
     }
@@ -246,7 +258,11 @@ class ReceiverService : Service(), Native.Listener {
             txt?.let { parseTxt(it).forEach { (k, v) -> setAttribute(k, v) } }
         }
         val listener = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(i: NsdServiceInfo) { LogBook.add("Anunciado na rede: ${i.serviceName} ($type)") }
+            override fun onServiceRegistered(i: NsdServiceInfo) {
+                // The flags tell the iPhone whether to ask for the PIN (0x8 set = ask).
+                val flags = txt?.let { t -> parseTxt(t).firstOrNull { it.first == "flags" || it.first == "sf" }?.second } ?: "?"
+                LogBook.add("Anunciado na rede: ${i.serviceName} ($type) · flags $flags")
+            }
             override fun onRegistrationFailed(i: NsdServiceInfo, code: Int) { LogBook.add("ERRO ao anunciar $type: código $code") }
             override fun onServiceUnregistered(i: NsdServiceInfo) {}
             override fun onUnregistrationFailed(i: NsdServiceInfo, code: Int) {}
@@ -295,6 +311,11 @@ class ReceiverService : Service(), Native.Listener {
         // The transcoder is remade at the next setup from the iPhone (it always comes with a new size).
     }
 
+    override fun pin(code: String) {
+        LogBook.add("O iPhone pediu o código (PIN)")
+        say(getString(R.string.status_pin, code), Phase.READY)
+    }
+
     override fun log(level: Int, msg: String) {
         LogBook.add("[uxplay] ${msg.trim()}")
     }
@@ -317,12 +338,19 @@ class ReceiverService : Service(), Native.Listener {
             val pp = pps
             if (sp != null && pp != null) {
                 val setup = START + sp + START + pp
-                if (!setup.contentEquals(iphoneConfig) || transcoder == null) {
+                val t = transcoder
+                if (t != null && fixedFrame && !setup.contentEquals(iphoneConfig)) {
+                    // The iPhone turned (new size): the same decoder takes the new setup, the frame stays.
                     iphoneConfig = setup
                     lastSps = sp
                     lastPps = pp
-                    transcoder?.release()
-                    transcoder = try { Transcoder(sp, pp, spsSize(sp), output) } catch (e: Exception) {
+                    t.newSetup(sp, pp, spsSize(sp))
+                } else if (t == null || !setup.contentEquals(iphoneConfig)) {
+                    iphoneConfig = setup
+                    lastSps = sp
+                    lastPps = pp
+                    t?.release()
+                    transcoder = try { Transcoder(sp, pp, spsSize(sp), fixedFrame, highFrame, output) } catch (e: Exception) {
                         LogBook.add("ERRO ao preparar o vídeo: ${e.javaClass.simpleName}: ${e.message}"); null
                     }
                 }

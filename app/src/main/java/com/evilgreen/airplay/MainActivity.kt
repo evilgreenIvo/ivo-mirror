@@ -30,7 +30,7 @@ import android.widget.TextView
  */
 class MainActivity : Activity() {
 
-    private companion object {
+    companion object {
         // IVO LIVE's green theme.
         val BG = Color.parseColor("#060A08")
         val CARD = Color.parseColor("#111915")
@@ -54,6 +54,11 @@ class MainActivity : Activity() {
         const val I_REPORT = 0xe873
         const val I_INFO = 0xe88e
         const val I_CAST = 0xe0e2
+        const val I_UPDATE = 0xe923
+        const val I_LOCK = 0xe897
+
+        /** Opened by the quick settings tile when it couldn't start the receiver itself. */
+        const val EXTRA_START = "start"
     }
 
     private lateinit var bold: Typeface
@@ -68,6 +73,13 @@ class MainActivity : Activity() {
     private lateinit var button: TextView
     private lateinit var qualityHint: TextView
     private val qualityPills = mutableListOf<Pair<TextView, Boolean>>()
+    private lateinit var settings: Settings
+    private lateinit var updateCard: View
+    private lateinit var updateText: TextView
+    private lateinit var pinCode: TextView
+    private lateinit var pinNew: TextView
+    private lateinit var nextTime: TextView
+    private val switches = mutableListOf<Pair<View, () -> Boolean>>()
     private var pulse: ValueAnimator? = null
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density + 0.5f).toInt()
@@ -100,6 +112,10 @@ class MainActivity : Activity() {
         bold = try { resources.getFont(R.font.barlow_semibold) } catch (_: Exception) { Typeface.DEFAULT_BOLD }
         regular = try { resources.getFont(R.font.barlow_medium) } catch (_: Exception) { Typeface.DEFAULT }
         icons = try { resources.getFont(R.font.icons_outlined) } catch (_: Exception) { Typeface.DEFAULT }
+        settings = Settings(this)
+        // Ligar ao abrir, or the tile asked for it.
+        if (!ReceiverService.running && (settings.autoStart || intent?.getBooleanExtra(EXTRA_START, false) == true))
+            ReceiverService.start(this)
 
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -114,6 +130,23 @@ class MainActivity : Activity() {
             }
         })
         col.addView(text(15f, DIM).apply { text = getString(R.string.tagline) })
+
+        // A newer version on GitHub: opens its page.
+        updateText = text(15f, ON_ACCENT, bold)
+        updateCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(GREEN, 16)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            isClickable = true
+            addView(icon(I_UPDATE, 22f, ON_ACCENT), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+            addView(updateText, LinearLayout.LayoutParams(0, -2, 1f))
+            setOnClickListener {
+                val url = settings.newerUrl.ifEmpty { "https://github.com/evilgreenIvo/ivo-mirror/releases/latest" }
+                try { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) } catch (_: Exception) {}
+            }
+        }
+        col.addView(updateCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
 
         // The status card.
         val card = LinearLayout(this).apply {
@@ -164,7 +197,7 @@ class MainActivity : Activity() {
 
         // Picture quality: the screen size the iPhone is told about.
         col.addView(text(13f, DIM, bold).apply {
-            text = getString(R.string.quality_title); letterSpacing = 0.12f
+            text = getString(R.string.settings_title); letterSpacing = 0.12f
             setPadding(dp(4), dp(28), 0, dp(10))
         })
         val seg = LinearLayout(this).apply {
@@ -180,16 +213,48 @@ class MainActivity : Activity() {
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
-                    ReceiverService.setHighQuality(this@MainActivity, high)
+                    settings.high = high
                     paint()
                 }
             }
             qualityPills += pill to high
             seg.addView(pill, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        col.addView(seg)
-        qualityHint = text(13f, DIM).apply { setLineSpacing(0f, 1.12f); setPadding(dp(4), dp(8), dp(4), 0) }
-        col.addView(qualityHint)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD, 18, LINE)
+            setPadding(dp(16), dp(14), dp(16), dp(10))
+        }
+        box.addView(text(16f, TITLE, bold).apply { text = getString(R.string.quality_title_short) })
+        box.addView(seg, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        seg.background = rounded(BG, 14, LINE)
+        qualityHint = text(13f, DIM).apply { setLineSpacing(0f, 1.12f); setPadding(0, dp(8), 0, dp(4)) }
+        box.addView(qualityHint)
+        box.addView(divider())
+        box.addView(switchRow(getString(R.string.frame_title), getString(R.string.frame_hint), { settings.fixedFrame }) { settings.fixedFrame = it })
+        box.addView(divider())
+        box.addView(switchRow(getString(R.string.pin_title), getString(R.string.pin_hint), { settings.pinOn }) { settings.pinOn = it })
+        pinCode = text(30f, GREEN, bold).apply { letterSpacing = 0.3f; setPadding(0, dp(2), 0, 0) }
+        pinNew = text(14f, GREEN, bold).apply {
+            text = getString(R.string.pin_new)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = rounded(CARD_ON, 99, LINE)
+            setOnClickListener { settings.newPin(); paint() }
+        }
+        box.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(8))
+            addView(icon(I_LOCK, 22f, GREEN), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
+            addView(pinCode, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(pinNew)
+            tag = "pin"
+        })
+        box.addView(divider())
+        box.addView(switchRow(getString(R.string.auto_title), getString(R.string.auto_hint), { settings.autoStart }) { settings.autoStart = it })
+        nextTime = text(13f, AMBER).apply { text = getString(R.string.quality_next_time); setPadding(0, dp(6), 0, dp(4)) }
+        box.addView(nextTime)
+        col.addView(box)
 
         // How to use: a real sequence, so numbered.
         col.addView(text(13f, DIM, bold).apply {
@@ -232,6 +297,41 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun divider() = View(this).apply {
+        setBackgroundColor(LINE)
+        layoutParams = LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(4); bottomMargin = dp(4) }
+    }
+
+    /** A setting that's on or off: name and explanation on the left, a switch in IVO LIVE's colours on the right. */
+    private fun switchRow(title: String, note: String, get: () -> Boolean, set: (Boolean) -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(10), 0, dp(10))
+        isClickable = true
+        isFocusable = true
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(text(16f, TITLE, bold).apply { text = title })
+            addView(text(13f, DIM).apply { text = note; setLineSpacing(0f, 1.1f); setPadding(0, dp(2), 0, 0) })
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(12) })
+        val knob = View(this@MainActivity)
+        val track = FrameLayout(this@MainActivity).apply { addView(knob, FrameLayout.LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER_VERTICAL }) }
+        addView(track, LinearLayout.LayoutParams(dp(46), dp(28)))
+        switches += track to get
+        setOnClickListener { set(!get()); paint() }
+    }
+
+    private fun paintSwitch(track: View, on: Boolean) {
+        val knob = (track as FrameLayout).getChildAt(0)
+        track.background = rounded(if (on) GREEN else Color.parseColor("#2C4237"), 99)
+        knob.background = rounded(if (on) ON_ACCENT else Color.parseColor("#C9D6CE"), 99)
+        (knob.layoutParams as FrameLayout.LayoutParams).apply {
+            gravity = Gravity.CENTER_VERTICAL or (if (on) Gravity.END else Gravity.START)
+            marginStart = dp(4); marginEnd = dp(4)
+        }
+        knob.requestLayout()
+    }
+
     /** A secondary button: icon and words on a card. */
     private fun row(code: Int, label: String) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -264,6 +364,7 @@ class MainActivity : Activity() {
         super.onResume()
         ReceiverService.onChange = { runOnUiThread { paint() } }
         paint()
+        UpdateCheck.maybeCheck(this) { if (!isFinishing) paint() }
     }
 
     override fun onPause() {
@@ -276,7 +377,7 @@ class MainActivity : Activity() {
     private fun sendLog() {
         val header = "IVO Mirror ${BuildConfig.VERSION_NAME} · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}\n" +
             "Estado: ${if (ReceiverService.running) ReceiverService.status else "desligado"}\n${ReceiverService.picture}\n" +
-            "Qualidade escolhida: ${if (ReceiverService.highQuality(this)) "Alta (2560x1440)" else "Normal (1920x1080)"}"
+            "Ajustes: qualidade ${if (settings.high) "Alta (2560x1440)" else "Normal (1920x1080)"} · moldura ${if (settings.fixedFrame) "16:9 fixa" else "do iPhone"} · PIN ${if (settings.pinOn) "ligado" else "desligado"} · ligar ao abrir ${if (settings.autoStart) "sim" else "não"}"
         val report = LogBook.problemReport(header)
         // A .txt file (old reports deleted), so long reports don't get cut by the messaging app.
         val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
@@ -321,14 +422,23 @@ class MainActivity : Activity() {
         button.background = if (on) rounded(Color.parseColor("#2A1213"), 18, Color.parseColor("#5A2224"))
             else GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(LIME, GREEN, DEEP)).apply { cornerRadius = dp(18).toFloat() }
 
-        val high = ReceiverService.highQuality(this)
+        val high = settings.high
         qualityPills.forEach { (p, h) ->
             val chosen = h == high
             p.setTextColor(if (chosen) ON_ACCENT else DIM)
             p.background = if (chosen) rounded(GREEN, 12) else null
         }
-        qualityHint.text = getString(if (high) R.string.quality_high_hint else R.string.quality_normal_hint) +
-            if (on) "\n" + getString(R.string.quality_next_time) else ""
+        qualityHint.text = getString(if (high) R.string.quality_high_hint else R.string.quality_normal_hint)
+        switches.forEach { (t, get) -> paintSwitch(t, get()) }
+        val pinRow = (pinCode.parent as View)
+        pinRow.visibility = if (settings.pinOn) View.VISIBLE else View.GONE
+        pinCode.text = settings.pinCode.toString()
+        nextTime.visibility = if (on) View.VISIBLE else View.GONE
+        val newer = settings.newerVersion
+        updateCard.visibility = if (newer.isNotEmpty()) View.VISIBLE else View.GONE
+        updateText.text = getString(R.string.update_card, newer)
+        if (phase == Phase.READY && settings.pinOn)
+            hint.text = getString(R.string.ready_hint_pin, ReceiverService.airplayName, settings.pinCode.toString())
 
         // The dot breathes while the picture comes in.
         if (phase == Phase.RECEIVING && pulse == null) {

@@ -36,7 +36,8 @@ import java.nio.ByteOrder
  * gets a whole picture from the iPhone. With the drawing in between, the encoder can be swapped alone
  * (chip → processor, smaller) while the decoder goes on: the picture never stops for good.
  */
-class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private val out: Output) {
+class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private val fixed: Boolean,
+                 private val high: Boolean, private val out: Output) {
 
     interface Output {
         /** The encoder's setup (SPS + PPS), first thing after every new encoder. */
@@ -63,6 +64,31 @@ class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private 
             uniform samplerExternalOES sTex;
             void main() { gl_FragColor = texture2D(sTex, vTex); }
         """
+        /** The quad scaled around the centre (the picture fitted in the frame, or filling it). */
+        const val VERTEX_SCALED = """
+            attribute vec4 aPos;
+            attribute vec4 aTex;
+            uniform mat4 uTex;
+            uniform vec2 uScale;
+            varying vec2 vTex;
+            void main() { gl_Position = vec4(aPos.xy * uScale, 0.0, 1.0); vTex = (uTex * aTex).xy; }
+        """
+        /** The tiny copy stretched over the frame: soft, and a bit darker so the picture stands out. */
+        const val VERTEX_PLAIN = """
+            attribute vec4 aPos;
+            attribute vec4 aTex;
+            varying vec2 vTex;
+            void main() { gl_Position = aPos; vTex = aTex.xy; }
+        """
+        const val FRAGMENT_BLUR = """
+            precision mediump float;
+            varying vec2 vTex;
+            uniform sampler2D sTex;
+            void main() { gl_FragColor = vec4(texture2D(sTex, vTex).rgb * 0.45, 1.0); }
+        """
+        /** The size of the blurred copy: this small, stretched with smoothing, it looks blurred. */
+        const val BLUR_W = 32
+        const val BLUR_H = 18
 
         /** The first H.264 codec on the phone's processor (not the video chip), or null. */
         fun softwareCodec(encoder: Boolean): String? = try {
@@ -72,8 +98,15 @@ class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private 
         } catch (_: Exception) { null }
     }
 
-    private val srcW: Int
-    private val srcH: Int
+    /** The iPhone's picture size now (changes when it turns, in the fixed frame). */
+    @Volatile private var srcW: Int
+    @Volatile private var srcH: Int
+    /** SPS + PPS to put in front of the next frame (the iPhone turned). */
+    @Volatile private var pendingSetup: ByteArray? = null
+    private var programScaled = 0
+    private var programBlur = 0
+    private var blurTex = 0
+    private var blurFbo = 0
     private val thread = HandlerThread("IvoAirPlay-gl").apply { start() }
     private val gl = Handler(thread.looper)
     @Volatile private var alive = true
@@ -130,7 +163,26 @@ class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private 
         context = EGL14.eglCreateContext(display, config, EGL14.EGL_NO_CONTEXT, intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0)
         idle = EGL14.eglCreatePbufferSurface(display, config, intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE), 0)
         EGL14.eglMakeCurrent(display, idle, idle, context)
-        program = makeProgram()
+        program = makeProgram(VERTEX, FRAGMENT)
+        if (fixed) {
+            programScaled = makeProgram(VERTEX_SCALED, FRAGMENT)
+            programBlur = makeProgram(VERTEX_PLAIN, FRAGMENT_BLUR)
+            val bt = IntArray(1)
+            GLES20.glGenTextures(1, bt, 0)
+            blurTex = bt[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, blurTex)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, BLUR_W, BLUR_H, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            val fb = IntArray(1)
+            GLES20.glGenFramebuffers(1, fb, 0)
+            blurFbo = fb[0]
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, blurFbo)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, blurTex, 0)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        }
         val t = IntArray(1)
         GLES20.glGenTextures(1, t, 0)
         tex = t[0]
@@ -166,15 +218,15 @@ class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private 
         }, 3000)
     }
 
-    private fun makeProgram(): Int {
+    private fun makeProgram(vertex: String, fragment: String): Int {
         fun shader(type: Int, src: String) = GLES20.glCreateShader(type).also {
             GLES20.glShaderSource(it, src); GLES20.glCompileShader(it)
             val ok = IntArray(1); GLES20.glGetShaderiv(it, GLES20.GL_COMPILE_STATUS, ok, 0)
             check(ok[0] != 0) { "shader: " + GLES20.glGetShaderInfoLog(it) }
         }
         val p = GLES20.glCreateProgram()
-        GLES20.glAttachShader(p, shader(GLES20.GL_VERTEX_SHADER, VERTEX))
-        GLES20.glAttachShader(p, shader(GLES20.GL_FRAGMENT_SHADER, FRAGMENT))
+        GLES20.glAttachShader(p, shader(GLES20.GL_VERTEX_SHADER, vertex))
+        GLES20.glAttachShader(p, shader(GLES20.GL_FRAGMENT_SHADER, fragment))
         GLES20.glLinkProgram(p)
         val ok = IntArray(1); GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, ok, 0)
         check(ok[0] != 0) { "program: " + GLES20.glGetProgramInfoLog(p) }
@@ -198,9 +250,15 @@ class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private 
         @Volatile var produced = 0
 
         init {
-            val k = if (level >= 1) minOf(1f, 1280f / maxOf(srcW, srcH), 720f / minOf(srcW, srcH)) else 1f
-            w = maxOf(16, ((srcW * k).toInt() / 16) * 16)
-            h = maxOf(16, ((srcH * k).toInt() / 16) * 16)
+            if (fixed) {
+                // Always 16:9, whatever the iPhone's shape: IVO LIVE's source never changes size.
+                w = if (level >= 1) 1280 else if (high) 2560 else 1920
+                h = if (level >= 1) 720 else if (high) 1440 else 1080
+            } else {
+                val k = if (level >= 1) minOf(1f, 1280f / maxOf(srcW, srcH), 720f / minOf(srcW, srcH)) else 1f
+                w = maxOf(16, ((srcW * k).toInt() / 16) * 16)
+                h = maxOf(16, ((srcH * k).toInt() / 16) * 16)
+            }
             val fps = if (level >= 1) 30 else 60
             val f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -324,26 +382,68 @@ class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private 
             texture.updateTexImage()
             if (e == null || e.failed) return
             texture.getTransformMatrix(matrix)
-            GLES20.glViewport(0, 0, e.w, e.h)
-            GLES20.glUseProgram(program)
-            val pos = GLES20.glGetAttribLocation(program, "aPos")
-            val tc = GLES20.glGetAttribLocation(program, "aTex")
-            quad.position(0)
-            GLES20.glVertexAttribPointer(pos, 2, GLES20.GL_FLOAT, false, 16, quad)
-            GLES20.glEnableVertexAttribArray(pos)
-            quad.position(8)
-            GLES20.glVertexAttribPointer(tc, 2, GLES20.GL_FLOAT, false, 16, quad)
-            GLES20.glEnableVertexAttribArray(tc)
-            GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uTex"), 1, false, matrix, 0)
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            if (fixed) drawFramed(e.w, e.h) else {
+                GLES20.glViewport(0, 0, e.w, e.h)
+                drawQuad(program, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex)
+            }
             EGLExt.eglPresentationTimeANDROID(display, e.egl, texture.timestamp)
             if (EGL14.eglSwapBuffers(display, e.egl)) drawn++
             else e.fail("o codificador não aceitou a imagem (EGL 0x${Integer.toHexString(EGL14.eglGetError())})")
         } catch (x: Exception) {
             if (e != null) e.fail("o desenho para o codificador falhou (${x.javaClass.simpleName}: ${x.message})")
         }
+    }
+
+    /** One textured quad with [p]; the scaled program also gets [sx], [sy]. */
+    private fun drawQuad(p: Int, target: Int, texture: Int, sx: Float = 1f, sy: Float = 1f) {
+        GLES20.glUseProgram(p)
+        val pos = GLES20.glGetAttribLocation(p, "aPos")
+        val tc = GLES20.glGetAttribLocation(p, "aTex")
+        quad.position(0)
+        GLES20.glVertexAttribPointer(pos, 2, GLES20.GL_FLOAT, false, 16, quad)
+        GLES20.glEnableVertexAttribArray(pos)
+        quad.position(8)
+        GLES20.glVertexAttribPointer(tc, 2, GLES20.GL_FLOAT, false, 16, quad)
+        GLES20.glEnableVertexAttribArray(tc)
+        GLES20.glGetUniformLocation(p, "uTex").let { if (it >= 0) GLES20.glUniformMatrix4fv(it, 1, false, matrix, 0) }
+        GLES20.glGetUniformLocation(p, "uScale").let { if (it >= 0) GLES20.glUniform2f(it, sx, sy) }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(target, texture)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+    }
+
+    /**
+     * The fixed 16:9 frame: a tiny copy of the picture filling it (stretched, so it's soft and darker)
+     * behind, and the whole picture fitted in the middle.
+     */
+    private fun drawFramed(w: Int, h: Int) {
+        val src = srcW.toFloat() / srcH
+        val dst = w.toFloat() / h
+        // Fitted: the whole picture inside. Filling: covers the frame, the rest cut off.
+        val fitX = if (src > dst) 1f else src / dst
+        val fitY = if (src > dst) dst / src else 1f
+        val fillX = if (src > dst) src / dst else 1f
+        val fillY = if (src > dst) 1f else dst / src
+        val bars = fitX < 0.995f || fitY < 0.995f
+        if (bars) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, blurFbo)
+            GLES20.glViewport(0, 0, BLUR_W, BLUR_H)
+            drawQuad(programScaled, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex, fillX, fillY)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        }
+        GLES20.glViewport(0, 0, w, h)
+        if (bars) drawQuad(programBlur, GLES20.GL_TEXTURE_2D, blurTex)
+        drawQuad(programScaled, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex, fitX, fitY)
+    }
+
+    /** The iPhone turned: the decoder gets the new setup in front of the next frame; the frame stays. */
+    fun newSetup(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?) {
+        val (w, h) = size ?: return
+        if (w <= 0 || h <= 0) return
+        pendingSetup = START + sps + START + pps
+        srcW = w
+        srcH = h
+        LogBook.add("Vídeo: o iPhone girou: ${w}x$h (moldura fixa, a imagem segue sem reiniciar)")
     }
 
     // --- the iPhone's side ---
@@ -354,8 +454,11 @@ class Transcoder(sps: ByteArray, pps: ByteArray, size: Pair<Int, Int>?, private 
             // Waits a little rather than dropping: a dropped picture spoils the ones after it.
             val i = dec.dequeueInputBuffer(200_000)
             if (i < 0) { LogBook.addRare("Aviso: o decodificador está atrasado (quadro do iPhone descartado)"); return }
-            dec.getInputBuffer(i)!!.apply { clear(); put(frame) }
-            dec.queueInputBuffer(i, 0, frame.size, System.nanoTime() / 1000, 0)
+            val setup = pendingSetup
+            pendingSetup = null
+            val data = if (setup != null) setup + frame else frame
+            dec.getInputBuffer(i)!!.apply { clear(); put(data) }
+            dec.queueInputBuffer(i, 0, data.size, System.nanoTime() / 1000, 0)
         } catch (e: Exception) { decoderLost(e) }
     }
 
